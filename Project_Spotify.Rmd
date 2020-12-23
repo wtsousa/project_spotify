@@ -1,0 +1,170 @@
+---
+title: "Project Spotify"
+author: "William Sousa"
+date: "12/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Using Simple Linear Regression to analyze Spotify Track Popularity
+
+### Objective
+
+This sequence of steps intends to analyze Spotify data using Linear Regression to obtain information about explanatory variables and how they relate to the popularity of songs.
+
+### Loading Libraries
+
+If you don't have any of the following libraries installed, you should install them first using the `install.packages()` function.
+
+```{r warning=FALSE, message=FALSE}
+library(tidyverse)
+library(summarytools)
+library(ggplot2)
+library(caret)
+library(corrplot)
+```
+
+### Reading Input Data
+
+The dataset with the Spotify data is available at Kaggle <https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks>. You should set the Working Directory to the location of the file after you download it.
+
+```{r readingData}
+setwd("~/Data Science/Projeto Spotify")
+spotify <- read.csv(file="./data.csv", header=TRUE, sep=",")
+summary(spotify)
+dim(spotify)
+```
+
+For Automatic Exploratory Data Analysis (EDA), the `dfSummary(spotify)` function from the summarytools package will generate a table with basic statistics to describe the dataset, including distribution graphs. Suffice to say, there are no missing values to be treated, and we can analyze the columns in the next section.
+
+### Dataset Variables
+
+Our dependent variable for analysis is `popularity`. The popularity of a track will range between 0 and 100, with 100 being the most popular. It is calculated by an algorithm and is based, for the most part, on the total number of plays the track has had. It also considers how recent those plays are. Generally speaking, songs that are played a lot now will have higher popularity than songs played a lot in the past. 
+
+In addition we have 11 numeric variables: five "confidence" measures (`acousticness`, `instrumentalness`, `liveness`, `speechiness` and `valence`) and six "description" measures (`danceability`, `energy`, `loudness`, `tempo` and `duration_ms`). 
+
+Plus, there are 3 categorical variables: one encoding `key` and two dummies `explicit` and `mode`. Let's treat them as factors:
+
+```{r factors}
+spotify$key <- as.factor(spotify$key)
+spotify$mode <- as.factor(spotify$mode)
+spotify$explicit <- as.factor(spotify$explicit)
+```
+
+### Correlations
+
+Beginning with the categorical variables, it's hard to see any correlation between `popularity` and both `key` and `mode`. `key` is mapping the twelve musical pitches (C, C#, D, etc) and `mode` indicates the scale of the melody of a track (minor or major).
+
+```{r categoricalPlots}
+ggplot(data = spotify, mapping = aes(x = key, y = popularity)) +
+  geom_boxplot()
+ggplot(data = spotify, mapping = aes(x = mode, y = popularity)) +
+  geom_boxplot()
+```
+
+Note that the graphs do not suggest any visible correlation between these variables and `popularity`, but the same cannot be said for `explicit`:
+
+```{r explicitPlot}
+ggplot(data = spotify, mapping = aes(x = explicit, y = popularity, fill=explicit)) +
+  geom_boxplot() +
+  ggtitle("Spotify - Popularity x Content") +
+  xlab("Is Content Explicit?") + ylab("Popularity") +
+  scale_x_discrete(breaks=c("0","1"),
+                     labels=c("No", "Yes")) +
+  theme(legend.position="none") +
+  scale_fill_manual(values=c("yellow", "red"))
+```
+  
+It seems that if a track contains explicit content, it makes a difference in its popularity. However, there is a possible relation with `year` that needs verification:
+
+```{r message=FALSE, yearExplicitPlot}
+ggplot(data = spotify %>% mutate(notExplicit = as.factor(ifelse(explicit==1,0,1))), 
+       mapping = aes(x = year, y = popularity, color=notExplicit)) +
+  geom_point(alpha = 1 / 100) + geom_smooth() + 
+  ggtitle("Spotify - Popularity x Year") +
+  xlab("Year") + ylab("Popularity") +
+#  scale_color_discrete(name = "Explicit Content?", labels = c("Yes", "No")) +
+  scale_x_continuous(breaks = round(seq(1920, 2020, by = 10),15)) +
+  scale_colour_manual(name = "Explicit Content?", labels = c("Yes", "No"), values = c("dark red", "yellow"))
+```
+
+The red density of points is higher as `year` increases. Therefore, the number of tracks with explicit content is higher in recent years. Also, the popularity of a song also increases with `year`. So in the next steps, we will need to check precisely how both variables can explain the `popularity` variation because one of them could be a mediating variable.
+
+For the remaining numeric variables, let's check their correlations using the `corrplot()` function:
+
+```{r correlations}
+spotify_num <- select_if(spotify, is.numeric)
+res <- cor(spotify_num)
+corrplot(res, type = "upper", order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+```
+
+The bigger circles indicate the relationship with a higher correlation. They suggest which set of variables is most likely to help predict `popularity`. But before we move on to check how much can these variables explain the popularity of a track, let's see how one particular variable related to popularity:
+
+```{r message=FALSE, BPM}
+ggplot(data = spotify, mapping = aes(x = tempo, y = popularity)) +
+  geom_point(alpha = 1 / 100) + geom_smooth() +
+  ggtitle("Spotify - Popularity x BPM") +
+  xlab("BPM") + ylab("Popularity") +
+  geom_point(aes(x=153, y=38), colour="red", size=3, shape=18) +
+  geom_point(aes(x=96, y=33), colour="red", size=3, shape=18)
+```
+
+The red dots show two peaks in the curve that approximates the graph points. They indicate that the popularity is higher around two specific BPM values, near 96 and 153. In fact, many hit songs are produced targetting these BPM values.
+
+### Linear Regression Modelling
+
+Simple linear regressions are easy methods to understand how explanatory variables can help predict a dependent variable. More complex modelling techniques are required to predict `popularity`. One simple reason is that it is limited between 0 and 100, and it is not continuous, so simple linear regressions cannot be used to forecast `popularity`. However, for the sake of simplicity, we can use the method to have quick answers about the predictive power of the variables included in the Spotify dataset.
+
+One indicator of the predictive power of a variable is the R-squared value. Assuming statistical significance, the closer to 1 R-squared is, the higher the model's predictive power.
+
+Considering the Spotify dataset, `year` is the variable with the highest predictive power:
+
+```{r message=FALSE, YearLM}
+model <- train(popularity~year, data = spotify ,method = "lm")
+summary(model)
+```
+
+As you can see, R-squared is `0.7438`, which means the `year` can explain almost 75% of the variation of `popularity`.
+
+The `explicit` variable has a considerable lower prediction power, as the R-squared value of its model indicates it can only explain 3.6% of the `popularity` variation:
+
+```{r message=FALSE, ExplicitLM}
+model <- train(popularity~explicit, data = spotify ,method = "lm")
+summary(model)
+```
+
+Since the p-value of the last model is close to zero, `explicit` has statistical significance although R-squared is very low. However, as you can see in the next model, `explicit` is likely to be a mediating variable when we add `year` to the regression:
+
+```{r message=FALSE, yearExplicitLM}
+model <- train(popularity~year+explicit, data = spotify ,method = "lm")
+summary(model)
+```
+
+The p-value of the coefficient related to `explicit` (explicit1) is high (0.381). Therefore, by holding `year` constant, the `explicit` variable shows no statistical significance in predicting `popularity`.
+
+When we consider all available variables in a model, little is added to the predictive power of the model that only finds `year` as the key explanatory variable. As can be seen in the following results:
+
+```{r message=FALSE, completeLM}
+explanatory_vars <- names(select(spotify,-c("popularity","id","name","artists","release_date")))
+outcome_var <- "popularity"
+model_formula <- paste(outcome_var,paste(explanatory_vars,collapse='+'),sep='~')
+model <- train(as.formula(model_formula), data = spotify ,method = "lm")
+summary(model)
+```
+
+The simulated model has statistical significance (low p-value), but considering all the added variables, thus the increase in complexity, the Adjusted R-squared is still around 0.75. Nevertheless, remember that linear regression is not an appropriate technique to predict `popularity` - it is a censored variable, and the relationship between it and the other variables will not be linear. 
+
+The model summary information confirms that, by holding all other variables constant, `year` is the key explanatory variable with the most significant predictive power for `popularity`. Note that the t value for the `year` coefficient is high - the variable coefficient of 0.668 has a relatively low standard error, and it can be interpreted directly: for every additional year, popularity increases around 0.67 points. It is worth noticing that even `year` does not have a linear relationship with `popularity` as we saw in one of the previous graphs that mapped both variables. Therefore, this is a conclusion based on a linear approximation.
+
+### Conclusion
+
+Simple visualizations, exploratory data analysis tools and linear regression models can be used to quickly understand the potential relationships between a dependent/target variable and other possible explanatory variables in a dataset. Although it may not always be a recommended technique for forecasting, as its effectiveness depends on multiple factors, linear regression can be applied to assess the predictive power of a set of characteristics/variables in a dataset.
+
+
+
+
